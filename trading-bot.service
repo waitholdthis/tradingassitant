@@ -1,0 +1,27 @@
+[Unit]
+Description=Trading Signal Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=waitholdthis
+WorkingDirectory=/home/waitholdthis/tradingassitant
+ExecStart=/home/waitholdthis/tradingassitant/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=30
+
+# Telegram credentials — fill these in
+Environment=TELEGRAM_BOT_TOKEN=
+Environment=TELEGRAM_CHAT_ID=
+
+# Optional overrides
+# Environment=UNIVERSE_SCAN_TIME_ET=09:00
+# Environment=UNIVERSE_SCAN_WORKERS=20
+# Environment=ACCOUNT_EQUITY=10000
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

@@ -54,6 +54,11 @@ PUSHOVER_USER  = os.getenv("PUSHOVER_USER", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# ── UNIVERSE SCAN ─────────────────────────────────────────────
+# Scans every US-listed stock (~9,000 tickers) to find the top 10 BUYs.
+UNIVERSE_SCAN_WORKERS   = int(os.getenv("UNIVERSE_SCAN_WORKERS", "20"))  # parallel threads
+UNIVERSE_SCAN_TIME_ET   = os.getenv("UNIVERSE_SCAN_TIME_ET", "09:00")    # daily trigger in ET (e.g. "09:00")
+
 # ── TRADE PLAN SIZING (attached to every push alert) ─────────
 ACCOUNT_EQUITY = float(os.getenv("ACCOUNT_EQUITY", "10000"))  # your account size ($)
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))   # fraction of equity risked per trade

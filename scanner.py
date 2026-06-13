@@ -5,6 +5,8 @@
 
 import time
 import datetime
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import yfinance as yf
 import pandas as pd
 
@@ -14,6 +16,7 @@ from config import (
     LOOKBACK_PERIOD, INTRADAY_INTERVAL,
     PENNY_STOCK_MAX_PRICE, FOCUS_PENNY_STOCKS,
     MIN_SIGNAL_SCORE, ALERT_COOLDOWN_MINUTES,
+    UNIVERSE_SCAN_WORKERS,
 )
 
 
@@ -125,3 +128,47 @@ def _meets_threshold(result: dict) -> bool:
 def mark_alerts_sent(actionable: list[dict]):
     for r in actionable:
         _mark_alerted(r["ticker"], r["signal"])
+
+
+# ── UNIVERSE SCAN ─────────────────────────────────────────────
+
+def scan_universe(top_n: int = 10) -> list[dict]:
+    """Scan every US-listed ticker and return the top N BUY signals.
+
+    Uses a thread pool for parallel fetching. Expect 5–10 minutes for
+    the full ~8,000-ticker universe.
+    """
+    from universe import get_universe
+
+    tickers = get_universe()
+    total   = len(tickers)
+    done    = 0
+    lock    = threading.Lock()
+    buys: list[dict] = []
+
+    print(f"\n  Universe scan: {total:,} tickers | {UNIVERSE_SCAN_WORKERS} workers")
+    print("  This takes 5–10 minutes — progress below.\n")
+
+    def _worker(ticker: str):
+        nonlocal done
+        result = scan_ticker(ticker)
+        with lock:
+            done += 1
+            if done % 250 == 0 or done == total:
+                pct = done * 100 // total
+                bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+                print(f"  [{bar}] {pct:3d}%  {done:,}/{total:,}", end="\r", flush=True)
+            if result and result["signal"] == "BUY" and _meets_threshold(result):
+                buys.append(result)
+
+    with ThreadPoolExecutor(max_workers=UNIVERSE_SCAN_WORKERS) as pool:
+        futures = {pool.submit(_worker, t): t for t in tickers}
+        for f in as_completed(futures):
+            try:
+                f.result()
+            except Exception:
+                pass  # individual ticker errors never abort the scan
+
+    print(f"\n\n  Scan complete. {len(buys):,} BUY signals found across {total:,} tickers.")
+    buys.sort(key=lambda r: r["score"], reverse=True)
+    return buys[:top_n]
