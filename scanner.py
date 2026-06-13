@@ -33,25 +33,33 @@ def _mark_alerted(ticker: str, signal: str):
     _last_alerted[f"{ticker}:{signal}"] = datetime.datetime.now()
 
 
+FETCH_RETRIES = 2          # extra attempts after the first failure
+FETCH_BACKOFF_SECONDS = 2  # doubled on each retry
+
+
 def fetch_data(ticker: str) -> pd.DataFrame | None:
-    """Download OHLCV data. Returns None on failure."""
-    try:
-        df = yf.download(
-            ticker,
-            period=LOOKBACK_PERIOD,
-            interval=INTRADAY_INTERVAL,
-            progress=False,
-            auto_adjust=True,
-        )
-        if df is None or df.empty or len(df) < 30:
-            return None
-        # Flatten MultiIndex columns if present
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        return df
-    except Exception as e:
-        print(f"  ⚠ Data error for {ticker}: {e}")
-        return None
+    """Download OHLCV data with retries. Returns None on failure."""
+    for attempt in range(FETCH_RETRIES + 1):
+        try:
+            df = yf.download(
+                ticker,
+                period=LOOKBACK_PERIOD,
+                interval=INTRADAY_INTERVAL,
+                progress=False,
+                auto_adjust=True,
+            )
+            if df is None or df.empty or len(df) < 30:
+                return None  # ticker has no usable data; retrying won't help
+            # Flatten MultiIndex columns if present
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            return df
+        except Exception as e:
+            if attempt < FETCH_RETRIES:
+                time.sleep(FETCH_BACKOFF_SECONDS * 2 ** attempt)
+            else:
+                print(f"  ⚠ Data error for {ticker} after {attempt + 1} attempts: {e}")
+    return None
 
 
 def scan_ticker(ticker: str) -> dict | None:

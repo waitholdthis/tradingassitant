@@ -12,6 +12,7 @@ from flask import Flask, jsonify, request, render_template_string
 sys.path.insert(0, ".")
 import config
 import indicators
+import notify
 import signals as sig_engine
 import scanner as sc
 
@@ -128,6 +129,7 @@ def api_scan_all():
             results.append(_scan_ticker_safe(t))
             time.sleep(0.2)
         results.sort(key=lambda r: r["score"], reverse=True)
+        notify.dispatch(results)  # mobile push for actionable signals (cooldown inside)
         with _lock:
             _state["last_results"] = results
             _state["last_scan_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -141,6 +143,7 @@ def api_scan_all():
 def api_scan_ticker(ticker):
     ticker = ticker.upper().strip()
     result = _scan_ticker_safe(ticker)
+    notify.dispatch([result])
     return jsonify(result)
 
 

@@ -18,6 +18,7 @@ import datetime
 
 import scanner
 import alerts
+import notify
 from config import (
     WATCHLIST, SCAN_INTERVAL_SECONDS,
     SHOW_ALL_TICKERS, CLEAR_SCREEN, LOG_FILE,
@@ -50,6 +51,9 @@ def run_scan(scan_num: int):
             print(alerts.format_alert(result))
             alerts.log_to_file(result, LOG_FILE)
         scanner.mark_alerts_sent(actionable)
+        pushed = notify.dispatch(actionable)
+        if pushed:
+            print(f"\n  📱 {pushed} alert(s) pushed to your phone.")
     else:
         print(f"\n  No signals above threshold (score ≥ {MIN_SIGNAL_SCORE}) this scan.")
 
@@ -80,20 +84,39 @@ def main():
     parser = argparse.ArgumentParser(description="Trading Signal Bot")
     parser.add_argument("--once",   action="store_true", help="Run one scan and exit")
     parser.add_argument("--ticker", type=str,            help="Deep-scan a single ticker")
+    parser.add_argument("--notify-test", action="store_true",
+                        help="Send a test push notification and exit")
     args = parser.parse_args()
 
+    if args.notify_test:
+        sys.exit(0 if notify.send_test() else 1)
+
+    channels = [name for name, _ in notify.enabled_channels()]
     print("\n  📈 Trading Signal Bot starting up...")
     print(f"  Watching: {', '.join(WATCHLIST)}")
     print(f"  Scan interval: {SCAN_INTERVAL_SECONDS}s | Min score: {MIN_SIGNAL_SCORE}/100")
+    if channels:
+        print(f"  📱 Mobile push: {', '.join(channels)}")
+    else:
+        print("  📱 Mobile push: OFF — set NTFY_TOPIC (see README) to get phone alerts")
 
     if args.ticker:
         deep_scan_ticker(args.ticker)
         return
 
     scan_num = 1
+    consecutive_failures = 0
     try:
         while True:
-            run_scan(scan_num)
+            try:
+                run_scan(scan_num)
+                consecutive_failures = 0
+            except Exception as e:
+                # Never let one bad scan kill the loop; back off if it keeps failing.
+                consecutive_failures += 1
+                backoff = min(SCAN_INTERVAL_SECONDS * 2 ** (consecutive_failures - 1), 900)
+                print(f"\n  ⚠ Scan #{scan_num} failed ({e!r}); retrying in {backoff:.0f}s")
+                time.sleep(backoff)
             scan_num += 1
             if args.once:
                 break

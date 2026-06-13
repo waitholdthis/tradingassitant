@@ -36,3 +36,24 @@ ALERT_COOLDOWN_MINUTES = 10      # Don't re-alert same ticker for N minutes
 # ── DISPLAY ──────────────────────────────────────────────────
 SHOW_ALL_TICKERS = True          # Show HOLD signals too (not just BUY/SELL)
 CLEAR_SCREEN      = True         # Clear terminal between scans
+
+# ── MOBILE PUSH NOTIFICATIONS ────────────────────────────────
+# Configure any (or all) channels via environment variables.
+# See README "Mobile push alerts" for setup instructions.
+import os
+
+# ntfy.sh — easiest: install the ntfy app, subscribe to your topic
+NTFY_TOPIC  = os.getenv("NTFY_TOPIC", "")          # e.g. "my-trades-x7k2p9"
+NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
+
+# Pushover
+PUSHOVER_TOKEN = os.getenv("PUSHOVER_TOKEN", "")
+PUSHOVER_USER  = os.getenv("PUSHOVER_USER", "")
+
+# Telegram
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# ── TRADE PLAN SIZING (attached to every push alert) ─────────
+ACCOUNT_EQUITY = float(os.getenv("ACCOUNT_EQUITY", "10000"))  # your account size ($)
+RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))   # fraction of equity risked per trade
