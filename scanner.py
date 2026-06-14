@@ -17,7 +17,61 @@ from config import (
     PENNY_STOCK_MAX_PRICE, FOCUS_PENNY_STOCKS,
     MIN_SIGNAL_SCORE, ALERT_COOLDOWN_MINUTES,
     UNIVERSE_SCAN_WORKERS,
+    MIN_PRICE, MIN_AVG_DAILY_DOLLAR_VOL, MIN_AVG_DAILY_VOLUME,
+    MAX_SPREAD_PROXY_PCT, ENFORCE_LIQUIDITY,
 )
+
+
+# ── LIQUIDITY GUARD ──────────────────────────────────────────
+
+_INTERVAL_MINUTES = {"1m": 1, "2m": 2, "5m": 5, "15m": 15, "30m": 30,
+                     "60m": 60, "1h": 60, "1d": 390}
+
+
+def _bars_per_day(interval: str = INTRADAY_INTERVAL) -> float:
+    """Approximate regular-session bars per trading day for the interval."""
+    mins = _INTERVAL_MINUTES.get(interval, 5)
+    return max(1.0, 390.0 / mins)   # 6.5h regular session = 390 minutes
+
+
+def liquidity_metrics(ind: dict) -> dict:
+    """Derive tradability metrics from an indicator readout."""
+    price = ind.get("price", 0.0)
+    avg_bar_vol = ind.get("volume_avg", 0.0)
+    bpd = _bars_per_day()
+    avg_daily_vol = avg_bar_vol * bpd
+    avg_daily_dollar_vol = avg_daily_vol * price
+    bar_range = ind.get("price_high", price) - ind.get("price_low", price)
+    spread_proxy_pct = (bar_range / price * 100) if price > 0 else 100.0
+    return {
+        "avg_daily_volume": int(avg_daily_vol),
+        "avg_daily_dollar_vol": round(avg_daily_dollar_vol, 0),
+        "spread_proxy_pct": round(spread_proxy_pct, 2),
+    }
+
+
+def liquidity_check(ind: dict) -> tuple[bool, str]:
+    """Return (is_tradable, reason). Blocks illiquid pump-and-dump traps.
+
+    Order matters: price floor first (junk shells), then dollar-volume (the
+    real exit-liquidity test), then share volume, then the spread proxy.
+    """
+    if not ENFORCE_LIQUIDITY:
+        return True, "liquidity guard off"
+    price = ind.get("price", 0.0)
+    m = liquidity_metrics(ind)
+    if price < MIN_PRICE:
+        return False, f"price ${price:.4g} < ${MIN_PRICE:.2f} floor"
+    if m["avg_daily_dollar_vol"] < MIN_AVG_DAILY_DOLLAR_VOL:
+        return False, (f"thin: ${m['avg_daily_dollar_vol']/1e6:.2f}M/day < "
+                       f"${MIN_AVG_DAILY_DOLLAR_VOL/1e6:.2f}M (liquidity trap risk)")
+    if m["avg_daily_volume"] < MIN_AVG_DAILY_VOLUME:
+        return False, (f"low volume: {m['avg_daily_volume']:,} sh/day < "
+                       f"{MIN_AVG_DAILY_VOLUME:,}")
+    if m["spread_proxy_pct"] > MAX_SPREAD_PROXY_PCT:
+        return False, (f"wide bars: {m['spread_proxy_pct']:.1f}% range > "
+                       f"{MAX_SPREAD_PROXY_PCT:.0f}% (thin book / slippage)")
+    return True, "liquid"
 
 
 # ── COOLDOWN TRACKER ─────────────────────────────────────────
@@ -79,6 +133,10 @@ def scan_ticker(ticker: str) -> dict | None:
     is_penny = price <= PENNY_STOCK_MAX_PRICE
 
     result = sig_engine.generate_signal(ind, ticker, is_penny=is_penny)
+    tradable, why = liquidity_check(ind)
+    result["liquidity"] = liquidity_metrics(ind)
+    result["tradable"]  = tradable
+    result["liquidity_note"] = why
     return result
 
 
@@ -106,11 +164,13 @@ def scan_all(watchlist: list[str], show_all: bool = True) -> list[dict]:
 
 
 def get_actionable(results: list[dict]) -> list[dict]:
-    """Filter to only BUY/SELL signals above minimum score."""
+    """Filter to BUY/SELL signals above threshold that also pass the liquidity
+    guard (so we never alert on a name we couldn't actually exit)."""
     return [
         r for r in results
         if r["signal"] in ("BUY", "SELL")
         and _meets_threshold(r)
+        and r.get("tradable", True)
         and not _in_cooldown(r["ticker"], r["signal"])
     ]
 
@@ -158,7 +218,8 @@ def scan_universe(top_n: int = 10) -> list[dict]:
                 pct = done * 100 // total
                 bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
                 print(f"  [{bar}] {pct:3d}%  {done:,}/{total:,}", end="\r", flush=True)
-            if result and result["signal"] == "BUY" and _meets_threshold(result):
+            if (result and result["signal"] == "BUY" and _meets_threshold(result)
+                    and result.get("tradable", True)):
                 buys.append(result)
 
     with ThreadPoolExecutor(max_workers=UNIVERSE_SCAN_WORKERS) as pool:
@@ -172,3 +233,54 @@ def scan_universe(top_n: int = 10) -> list[dict]:
     print(f"\n\n  Scan complete. {len(buys):,} BUY signals found across {total:,} tickers.")
     buys.sort(key=lambda r: r["score"], reverse=True)
     return buys[:top_n]
+
+
+def screen_penny_movers(top_n: int = 10, max_price: float = None) -> list[dict]:
+    """Scan the universe for liquid penny stocks showing real momentum.
+
+    Unlike a naive penny scanner, this REQUIRES the liquidity guard to pass
+    (genuine dollar-volume) and ranks by a blend of signal score and relative
+    volume — so it surfaces movers you can actually trade, not illiquid pumps.
+    """
+    from universe import get_universe
+    max_price = max_price if max_price is not None else PENNY_STOCK_MAX_PRICE
+    tickers = get_universe()
+    total   = len(tickers)
+    done    = 0
+    lock    = threading.Lock()
+    movers: list[dict] = []
+
+    print(f"\n  Penny-mover screen: {total:,} tickers | filter ≤${max_price:.2f}, "
+          f"liquid only")
+
+    def _worker(ticker: str):
+        nonlocal done
+        result = scan_ticker(ticker)
+        with lock:
+            done += 1
+            if done % 250 == 0 or done == total:
+                pct = done * 100 // total
+                bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+                print(f"  [{bar}] {pct:3d}%  {done:,}/{total:,}", end="\r", flush=True)
+            if not result or not result.get("tradable"):
+                return
+            ind = result["indicators"]
+            if ind["price"] > max_price:
+                return
+            if result["signal"] != "BUY" or not _meets_threshold(result):
+                return
+            movers.append(result)
+
+    with ThreadPoolExecutor(max_workers=UNIVERSE_SCAN_WORKERS) as pool:
+        futures = {pool.submit(_worker, t): t for t in tickers}
+        for f in as_completed(futures):
+            try:
+                f.result()
+            except Exception:
+                pass
+
+    # Rank by score, then relative volume (momentum confirmation).
+    movers.sort(key=lambda r: (r["score"], r["indicators"]["volume_ratio"]),
+                reverse=True)
+    print(f"\n\n  {len(movers):,} liquid penny BUY signals found.")
+    return movers[:top_n]

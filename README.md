@@ -99,6 +99,45 @@ three soldiers/crows)
 **Confluence gate:** BUY/SELL requires **3+ independent confirming
 indicators**; ranging markets (ADX < 20) are dampened.
 
+## Calibrated confidence (the honest "% confidence")
+
+The 0–100 score is also mapped to a **measured probability** — the historical
+hit-rate of that score bucket, computed by a walk-forward backtest of the real
+engine (`calibration.py`), reported as a **Wilson lower bound** so small samples
+can't over-claim. Every signal carries `confidence_pct` = the calibrated chance
+it reaches its first target (TP1) before its stop.
+
+```bash
+python calibration.py            # build/refresh calibration.json (2y daily basket)
+python calibration.py --target-rr 0.25   # see how a tighter target changes the win rate
+```
+
+**This is the real answer to "give me 80% confidence":** 80% is reachable only
+with a very tight (~0.25R) target whose expectancy is ≈ 0 — the frequent small
+wins are cancelled by the occasional full stop. The engine's actual edge is at
+the **2R target** (~50% win rate, **+0.48R/trade**). High win-rate ≠ profit.
+Full analysis and numbers in **[CALIBRATION.md](CALIBRATION.md)**.
+
+## Liquidity guard (anti pump-and-dump)
+
+Every signal is checked for genuine tradability before it can alert: a price
+floor, a **minimum average daily dollar-volume** (the real exit-liquidity test),
+a share-volume floor, and a wide-bar/thin-book proxy. Illiquid traps are marked
+`tradable: false` and never pushed. Tune in `config.py` (`MIN_AVG_DAILY_DOLLAR_VOL`
+etc.). A dedicated liquid-penny-mover screen is in `scanner.screen_penny_movers()`.
+
+## AI desk note (optional)
+
+`commentary.py` adds an optional LLM-written analyst note, fed **only** the
+computed indicators, trade plan, and *calibrated* confidence — it is told not to
+invent data or claim an unearned confidence figure. Off by default; enable with:
+
+```bash
+pip install anthropic
+export ANTHROPIC_API_KEY="sk-ant-..."
+python commentary.py AAPL        # CLI, or click "Generate desk note" in the dashboard
+```
+
 ## Reliability
 
 The scan loop is built to run unattended:

@@ -29,6 +29,18 @@ MIN_SIGNAL_SCORE  = 60           # Minimum score (0-100) to emit alert
 PENNY_STOCK_MAX_PRICE = 5.00     # Tickers at or below this are "penny stocks"
 FOCUS_PENNY_STOCKS    = False    # If True, only alert on penny stocks
 
+# ── LIQUIDITY GUARD (anti pump-and-dump / liquidity trap) ────
+# A signal must clear these to be actionable. The dollar-volume floor is the
+# single most important defense against illiquid traps: a name can spike 300%
+# on a press release, but if it normally trades $50k/day you cannot exit a real
+# position without crushing the price. Require genuine, sustained liquidity.
+MIN_PRICE              = 0.50     # reject sub-$0.50 junk / near-delisted shells
+MIN_AVG_DAILY_DOLLAR_VOL = 1_000_000   # >= $1M average daily $-volume to trade
+MIN_AVG_DAILY_VOLUME   = 300_000  # >= 300k average daily shares
+MAX_SPREAD_PROXY_PCT   = 8.0      # reject if one bar's range > this % of price
+                                  # (wide bars ≈ thin book ≈ slippage on exit)
+ENFORCE_LIQUIDITY      = True     # set False to disable the guard entirely
+
 # ── ALERT SETTINGS ───────────────────────────────────────────
 LOG_FILE = "alerts.log"          # File to save all alerts
 ALERT_COOLDOWN_MINUTES = 10      # Don't re-alert same ticker for N minutes

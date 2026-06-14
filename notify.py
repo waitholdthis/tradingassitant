@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 
 import config
+from signals import build_trade_plan as _levels
 from trading_assistant.risk import fixed_fractional_size
 
 log = logging.getLogger("notify")
@@ -57,26 +58,22 @@ def _get(result: dict, key: str, default=0.0):
 # ── TRADE PLAN ────────────────────────────────────────────────
 
 def build_trade_plan(price: float, atr: float, signal: str) -> dict | None:
-    """Stop, target, and position size for an alert.
+    """Trade levels (from signals.build_trade_plan) plus position sizing.
 
-    Stops sit 2 ATRs from entry (falling back to 5% of price when ATR is
-    unavailable) with a 2:1 reward:risk target. Size risks
-    ``RISK_PER_TRADE`` of ``ACCOUNT_EQUITY`` to the stop.
+    Adds ``shares`` and ``risk_dollars`` by risking ``RISK_PER_TRADE`` of
+    ``ACCOUNT_EQUITY`` to the stop. Levels themselves are defined in one place
+    (signals.py) so alerts, the dashboard, and calibration never diverge.
     """
-    if price <= 0:
+    plan = _levels(price, atr, signal)
+    if plan is None:
         return None
-    risk = atr * 2.0 if atr and atr > 0 else price * 0.05
-    if signal == "BUY":
-        stop, target = price - risk, price + risk * 2.0
-    else:
-        stop, target = price + risk, price - risk * 2.0
+    risk = plan["risk_per_share"]
     shares = fixed_fractional_size(
         config.ACCOUNT_EQUITY, price, config.RISK_PER_TRADE, stop_distance=risk
     )
     return {
-        "entry": price,
-        "stop": round(stop, 4),
-        "target": round(target, 4),
+        **plan,
+        "target": plan["tp1"],   # back-compat alias
         "shares": shares,
         "risk_dollars": round(shares * risk, 2),
     }
@@ -90,25 +87,34 @@ def format_message(result: dict) -> tuple[str, str, bool]:
     signal = result["signal"]
     score = result["score"]
     confidence = result.get("confidence", "")
+    conf_pct = result.get("confidence_pct")
     price = float(_get(result, "price"))
     atr = float(_get(result, "atr"))
     urgent = confidence == "STRONG"
 
+    # Prefer the measured calibrated probability in the headline when we have it.
+    conf_str = (f"{conf_pct:.0f}% hit-rate" if conf_pct is not None
+                else f"{confidence}")
     arrow = "▲" if signal == "BUY" else "▼"
-    title = f"{arrow} {signal} {ticker} @ ${price:.4g} — {confidence} ({score}/100)"
+    title = f"{arrow} {signal} {ticker} @ ${price:.4g} — {conf_str} ({score}/100)"
 
     lines = []
     plan = build_trade_plan(price, atr, signal)
     if plan:
         if signal == "BUY":
             lines.append(
-                f"Plan: {plan['shares']} sh, stop {plan['stop']:.4g}, "
-                f"target {plan['target']:.4g} (risk ${plan['risk_dollars']:,.0f})"
+                f"Plan: {plan['shares']} sh @ {plan['entry']:.4g}, stop {plan['stop']:.4g}, "
+                f"TP1 {plan['tp1']:.4g} / TP2 {plan['tp2']:.4g} (risk ${plan['risk_dollars']:,.0f})"
             )
         else:
             lines.append(
                 f"If holding: exit/tighten stop to {plan['stop']:.4g}, "
-                f"downside target {plan['target']:.4g}"
+                f"downside TP1 {plan['tp1']:.4g} / TP2 {plan['tp2']:.4g}"
+            )
+        if conf_pct is not None:
+            lines.append(
+                f"Calibrated {conf_pct:.0f}% to TP1 (measured) — pair with the 2:1 "
+                f"runner; win-rate alone isn't edge."
             )
     risk = result.get("risk")
     if risk:

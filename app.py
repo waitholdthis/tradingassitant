@@ -13,6 +13,7 @@ sys.path.insert(0, ".")
 import config
 import indicators
 import notify
+import commentary
 import signals as sig_engine
 import scanner as sc
 
@@ -40,6 +41,13 @@ def _result_to_dict(r):
         "signal":     r["signal"],
         "score":      r["score"],
         "confidence": r["confidence"],
+        "confidence_pct":     r.get("confidence_pct"),
+        "confidence_basis":   r.get("confidence_basis", "uncalibrated"),
+        "confidence_trusted": r.get("confidence_trusted", False),
+        "trade_plan": r.get("trade_plan"),
+        "tradable":   r.get("tradable", True),
+        "liquidity":  r.get("liquidity", {}),
+        "liquidity_note": r.get("liquidity_note", ""),
         "risk":       r["risk"],
         "is_penny":   r["is_penny"],
         "regime":     r.get("regime", "—"),
@@ -71,7 +79,10 @@ def _scan_ticker_safe(ticker):
         df = sc.fetch_data(ticker)
         if df is None or len(df) < 30:
             return {"ticker": ticker, "signal": "—", "score": 50,
-                    "confidence": "—", "risk": "—", "is_penny": False,
+                    "confidence": "—", "confidence_pct": None,
+                    "confidence_basis": "uncalibrated", "confidence_trusted": False,
+                    "trade_plan": None, "tradable": False, "liquidity": {},
+                    "liquidity_note": "", "risk": "—", "is_penny": False,
                     "regime": "—", "adx": 0, "confluence": {},
                     "reasons": ["Insufficient data"], "price": 0,
                     "rsi": 50, "macd_hist": 0, "volume_ratio": 1,
@@ -145,6 +156,24 @@ def api_scan_ticker(ticker):
     result = _scan_ticker_safe(ticker)
     notify.dispatch([result])
     return jsonify(result)
+
+
+@app.route("/api/commentary/<ticker>", methods=["POST"])
+def api_commentary(ticker):
+    """Optional LLM desk note. Returns {enabled, note}. Off when no API key."""
+    ticker = ticker.upper().strip()
+    if not commentary.is_enabled():
+        return jsonify({
+            "enabled": False,
+            "note": "AI commentary is off — set ANTHROPIC_API_KEY and "
+                    "`pip install anthropic` to enable.",
+        })
+    try:
+        full = sc.scan_ticker(ticker)  # rich result (has indicators + plan)
+        note = commentary.generate(full) if full else None
+        return jsonify({"enabled": True, "note": note or "Commentary unavailable."})
+    except Exception as e:
+        return jsonify({"enabled": True, "note": f"Commentary error: {e}"}), 200
 
 
 @app.route("/api/watchlist", methods=["GET"])
@@ -563,6 +592,34 @@ function showDetail(r) {
   const sig = r.signal || '—';
   const scoreColor = sig === 'BUY' ? '#3fb950' : sig === 'SELL' ? '#f85149' : '#d29922';
   const barClass = scoreBarClass(sig, r.score);
+
+  // Calibrated confidence — measured hit-rate, not a label.
+  let confLine;
+  if (r.confidence_pct != null && r.confidence_basis === 'calibrated') {
+    const trust = r.confidence_trusted ? '' : ' (low sample)';
+    confLine = `<b style="color:${scoreColor}">${r.confidence_pct}% calibrated</b> hit-rate to TP1${trust} · ${r.confidence} · ${r.risk} risk · ${r.regime||'—'} (ADX ${r.adx})`;
+  } else {
+    confLine = `${r.confidence} confidence (uncalibrated) · ${r.risk} risk · ${r.regime||'—'} (ADX ${r.adx})`;
+  }
+
+  // Trade plan block (BUY/SELL only).
+  const p = r.trade_plan;
+  const planHtml = p ? `
+    <div style="margin-top:12px"><div class="section-title">TRADE PLAN (${sig})</div>
+    <div class="detail-grid" style="grid-template-columns:repeat(4,1fr)">
+      <div class="detail-metric"><div class="detail-metric-val">$${p.entry}</div><div class="detail-metric-label">Entry</div></div>
+      <div class="detail-metric"><div class="detail-metric-val" style="color:#f85149">$${p.stop}</div><div class="detail-metric-label">Stop</div></div>
+      <div class="detail-metric"><div class="detail-metric-val" style="color:#3fb950">$${p.tp1}</div><div class="detail-metric-label">TP1 (1R)</div></div>
+      <div class="detail-metric"><div class="detail-metric-val" style="color:#3fb950">$${p.tp2}</div><div class="detail-metric-label">TP2 (2R)</div></div>
+    </div></div>` : '';
+
+  // Liquidity line.
+  const liq = r.liquidity || {};
+  const liqHtml = liq.avg_daily_dollar_vol != null ? `
+    <div style="margin-top:8px;color:var(--muted);font-size:12px">
+      Liquidity: $${(liq.avg_daily_dollar_vol/1e6).toFixed(1)}M/day · ${(liq.avg_daily_volume||0).toLocaleString()} sh/day
+      ${r.tradable ? '' : ' · <span style="color:#f85149">⚠ '+(r.liquidity_note||'illiquid')+'</span>'}
+    </div>` : '';
   
   const patternsHtml = Object.entries(r.patterns || {}).length > 0 ?
     `<div style="margin-top:12px"><div class="section-title">PATTERNS</div>
@@ -583,7 +640,14 @@ function showDetail(r) {
           <div class="score-bar ${barClass}" style="width:${r.score}%"></div>
         </div>
       </div>
-      <div style="color:var(--muted);font-size:12px">${r.confidence} confidence · ${r.risk} risk · ${r.regime || '—'} (ADX ${r.adx})</div>
+      <div style="font-size:12px">${confLine}</div>
+      ${liqHtml}
+    </div>
+    ${planHtml}
+    <div style="margin-top:16px">
+      <div class="section-title">AI DESK NOTE</div>
+      <button class="btn btn-ghost" id="commentaryBtn" onclick="getCommentary('${r.ticker}')">🧠 Generate desk note</button>
+      <div id="commentaryBox" style="margin-top:10px;white-space:pre-wrap;font-size:13px;line-height:1.5;color:var(--text)"></div>
     </div>
     <div class="detail-grid">
       <div class="detail-metric"><div class="detail-metric-val">$${r.price.toFixed(4)}</div><div class="detail-metric-label">Price</div></div>
@@ -611,6 +675,24 @@ function showDetail(r) {
     </div>`;
   
   document.getElementById('detailOverlay').classList.add('open');
+}
+
+async function getCommentary(ticker) {
+  const btn = document.getElementById('commentaryBtn');
+  const box = document.getElementById('commentaryBox');
+  if (!btn || !box) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Thinking…';
+  box.textContent = '';
+  try {
+    const r = await fetch(`/api/commentary/${ticker}`, {method:'POST'});
+    const data = await r.json();
+    box.textContent = data.note || '(no commentary)';
+  } catch (e) {
+    box.textContent = 'Commentary request failed.';
+  }
+  btn.disabled = false;
+  btn.innerHTML = '🧠 Generate desk note';
 }
 
 async function rescanFromDetail(ticker) {

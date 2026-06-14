@@ -1,0 +1,137 @@
+{
+  "generated": "2026-06-13T19:06:05",
+  "params": {
+    "symbols": [
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "TSLA",
+      "AMD",
+      "META",
+      "AMZN",
+      "GOOGL",
+      "SPY",
+      "QQQ",
+      "JPM",
+      "XOM",
+      "BAC",
+      "F",
+      "PLTR",
+      "SOFI",
+      "MARA",
+      "RIOT",
+      "SNDL",
+      "NIO"
+    ],
+    "period": "2y",
+    "interval": "1d",
+    "window": 250,
+    "stride": 1,
+    "max_hold": 10,
+    "min_samples": 30,
+    "wilson_z": 1.2816,
+    "stop_atr_mult": 2.0,
+    "target_rr": 1.0
+  },
+  "total_trades": 3127,
+  "buy": {
+    "65": {
+      "n": 243,
+      "wins": 137,
+      "win_rate": 0.5638,
+      "confidence": 0.5227,
+      "expectancy_r": 0.1276,
+      "trusted": true
+    },
+    "70": {
+      "n": 323,
+      "wins": 184,
+      "win_rate": 0.5697,
+      "confidence": 0.5341,
+      "expectancy_r": 0.1393,
+      "trusted": true
+    },
+    "75": {
+      "n": 288,
+      "wins": 167,
+      "win_rate": 0.5799,
+      "confidence": 0.5422,
+      "expectancy_r": 0.1597,
+      "trusted": true
+    },
+    "80": {
+      "n": 217,
+      "wins": 109,
+      "win_rate": 0.5023,
+      "confidence": 0.459,
+      "expectancy_r": 0.0046,
+      "trusted": true
+    },
+    "85": {
+      "n": 213,
+      "wins": 118,
+      "win_rate": 0.554,
+      "confidence": 0.5101,
+      "expectancy_r": 0.108,
+      "trusted": true
+    },
+    "90": {
+      "n": 837,
+      "wins": 442,
+      "win_rate": 0.5281,
+      "confidence": 0.5059,
+      "expectancy_r": 0.0562,
+      "trusted": true
+    }
+  },
+  "sell": {
+    "0": {
+      "n": 188,
+      "wins": 74,
+      "win_rate": 0.3936,
+      "confidence": 0.3491,
+      "expectancy_r": -0.2128,
+      "trusted": true
+    },
+    "10": {
+      "n": 90,
+      "wins": 40,
+      "win_rate": 0.4444,
+      "confidence": 0.3789,
+      "expectancy_r": -0.1111,
+      "trusted": true
+    },
+    "15": {
+      "n": 121,
+      "wins": 62,
+      "win_rate": 0.5124,
+      "confidence": 0.4544,
+      "expectancy_r": 0.0248,
+      "trusted": true
+    },
+    "20": {
+      "n": 146,
+      "wins": 62,
+      "win_rate": 0.4247,
+      "confidence": 0.3734,
+      "expectancy_r": -0.1507,
+      "trusted": true
+    },
+    "25": {
+      "n": 223,
+      "wins": 87,
+      "win_rate": 0.3901,
+      "confidence": 0.3492,
+      "expectancy_r": -0.2197,
+      "trusted": true
+    },
+    "30": {
+      "n": 238,
+      "wins": 92,
+      "win_rate": 0.3866,
+      "confidence": 0.347,
+      "expectancy_r": -0.2269,
+      "trusted": true
+    }
+  }
+}
