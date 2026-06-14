@@ -5,7 +5,7 @@ Run:  python app.py
 Open: http://localhost:5000
 """
 
-import sys, json, time, threading
+import os, sys, json, time, threading
 from datetime import datetime
 from flask import Flask, jsonify, request, render_template_string
 
@@ -112,6 +112,19 @@ def _scan_ticker_safe(ticker):
 
 @app.route("/")
 def index():
+    """Cinematic marketing landing page (THE TAPE)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "landing.html")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return render_template_string(DASHBOARD_HTML)  # fall back to the app
+
+
+@app.route("/app")
+@app.route("/dashboard")
+def dashboard():
+    """The live signal terminal."""
     return render_template_string(DASHBOARD_HTML)
 
 
