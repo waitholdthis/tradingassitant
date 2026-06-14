@@ -126,6 +126,44 @@ a share-volume floor, and a wide-bar/thin-book proxy. Illiquid traps are marked
 `tradable: false` and never pushed. Tune in `config.py` (`MIN_AVG_DAILY_DOLLAR_VOL`
 etc.). A dedicated liquid-penny-mover screen is in `scanner.screen_penny_movers()`.
 
+## Options suggestions (calls & puts with price targets)
+
+A BUY maps to a **CALL**, a SELL to a **PUT**. `options.py` pulls the live chain
+(yfinance), picks a liquid contract near a target delta (~ATM) and ~30 DTE, then
+**prices it with Black-Scholes** to produce concrete option dollar targets:
+
+```bash
+python options.py AAPL              # CLI
+python main.py --ticker AAPL        # deep-scan now includes the options play
+# or click "Suggest call/put + price targets" in the dashboard detail panel
+# or POST /api/options/<ticker>
+```
+
+Output example:
+
+```
+CALL · AAPL 295 2026-07-10 (27DTE, OTM, Δ+0.45, IV 24%)
+  BUY  ≤ $5.85  (bid $5.50 / ask $5.85; $585/contract max risk)
+  SELL TP1 $9.73 (+66%) · TP2 $15.50 (+165%)
+  STOP $2.55   ·   breakeven underlying $300.85
+```
+
+**Two honest design choices, both deliberate:**
+
+1. **Targets are scaled to the option's horizon, not the 5-minute scalp.** The
+   stock plan's intraday ATR (~0.3% moves) is far too small to beat option theta
+   and spread over a multi-day hold — mapping it straight across gives *negative*
+   option returns. Instead the underlying targets are sized to a ~1σ **implied
+   move** over the hold (`σ = spot·IV·√(hold/365)`): TP1 = +1σ, TP2 = +2σ,
+   stop = −1σ.
+2. **The calibrated % is the underlying's hit-rate, not the option's P&L.**
+   Options add IV-crush and theta the stock backtest doesn't model, so option
+   prices are Black-Scholes estimates at constant IV, and liquidity (bid/ask
+   spread, open interest) is gated. Verify the live quote before trading.
+
+Tune in `config.py`: `OPTIONS_TARGET_DTE`, `OPTIONS_TARGET_DELTA`,
+`OPTIONS_HOLD_DAYS`, `OPTIONS_MAX_SPREAD_PCT`, `OPTIONS_MIN_OPEN_INT`.
+
 ## AI desk note (optional)
 
 `commentary.py` adds an optional LLM-written analyst note, fed **only** the

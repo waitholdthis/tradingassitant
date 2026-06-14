@@ -74,3 +74,17 @@ UNIVERSE_SCAN_TIME_ET   = os.getenv("UNIVERSE_SCAN_TIME_ET", "09:00")    # daily
 # ── TRADE PLAN SIZING (attached to every push alert) ─────────
 ACCOUNT_EQUITY = float(os.getenv("ACCOUNT_EQUITY", "10000"))  # your account size ($)
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))   # fraction of equity risked per trade
+
+# ── OPTIONS SUGGESTIONS (calls / puts with price targets) ────
+# A BUY signal maps to a CALL, a SELL signal to a PUT. The contract is chosen
+# near a target delta and days-to-expiry, then Black-Scholes reprices it at the
+# underlying's stop/TP1/TP2 to produce concrete buy/sell price targets.
+OPTIONS_ENABLED        = True
+OPTIONS_TARGET_DTE     = int(os.getenv("OPTIONS_TARGET_DTE", "30"))   # preferred days to expiry
+OPTIONS_MIN_DTE        = int(os.getenv("OPTIONS_MIN_DTE", "7"))       # avoid 0DTE gamma roulette
+OPTIONS_MAX_DTE        = int(os.getenv("OPTIONS_MAX_DTE", "75"))
+OPTIONS_TARGET_DELTA   = float(os.getenv("OPTIONS_TARGET_DELTA", "0.50"))  # ~ATM; 0.30 = cheaper OTM
+OPTIONS_HOLD_DAYS      = float(os.getenv("OPTIONS_HOLD_DAYS", "5"))   # expected hold (for theta on targets)
+OPTIONS_MAX_SPREAD_PCT = float(os.getenv("OPTIONS_MAX_SPREAD_PCT", "18"))  # reject wide bid/ask
+OPTIONS_MIN_OPEN_INT   = int(os.getenv("OPTIONS_MIN_OPEN_INT", "50"))      # liquidity floor
+RISK_FREE_RATE         = float(os.getenv("RISK_FREE_RATE", "0.04"))

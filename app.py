@@ -14,6 +14,7 @@ import config
 import indicators
 import notify
 import commentary
+import options as opt_engine
 import signals as sig_engine
 import scanner as sc
 
@@ -187,6 +188,23 @@ def api_commentary(ticker):
         return jsonify({"enabled": True, "note": note or "Commentary unavailable."})
     except Exception as e:
         return jsonify({"enabled": True, "note": f"Commentary error: {e}"}), 200
+
+
+@app.route("/api/options/<ticker>", methods=["POST"])
+def api_options(ticker):
+    """Suggest a call/put with buy/sell price targets for a ticker's signal."""
+    ticker = ticker.upper().strip()
+    try:
+        full = sc.scan_ticker(ticker)
+        if not full:
+            return jsonify({"ok": False, "note": f"No data for {ticker}."})
+        if full["signal"] not in ("BUY", "SELL"):
+            return jsonify({"ok": False, "signal": full["signal"],
+                            "note": f"{ticker} is {full['signal']} — no directional options play."})
+        plan = opt_engine.suggest(full)
+        return jsonify({"ok": True, "signal": full["signal"], "options": plan})
+    except Exception as e:
+        return jsonify({"ok": False, "note": f"Options error: {e}"}), 200
 
 
 @app.route("/api/watchlist", methods=["GET"])
@@ -657,6 +675,12 @@ function showDetail(r) {
       ${liqHtml}
     </div>
     ${planHtml}
+    ${(sig === 'BUY' || sig === 'SELL') ? `
+    <div style="margin-top:16px">
+      <div class="section-title">OPTIONS PLAY — ${sig === 'BUY' ? 'CALL' : 'PUT'}</div>
+      <button class="btn btn-ghost" id="optionsBtn" onclick="getOptions('${r.ticker}')">⚡ Suggest ${sig === 'BUY' ? 'call' : 'put'} + price targets</button>
+      <div id="optionsBox" style="margin-top:10px"></div>
+    </div>` : ''}
     <div style="margin-top:16px">
       <div class="section-title">AI DESK NOTE</div>
       <button class="btn btn-ghost" id="commentaryBtn" onclick="getCommentary('${r.ticker}')">🧠 Generate desk note</button>
@@ -688,6 +712,48 @@ function showDetail(r) {
     </div>`;
   
   document.getElementById('detailOverlay').classList.add('open');
+}
+
+async function getOptions(ticker) {
+  const btn = document.getElementById('optionsBtn');
+  const box = document.getElementById('optionsBox');
+  if (!btn || !box) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Pricing chain…';
+  box.innerHTML = '';
+  try {
+    const r = await fetch(`/api/options/${ticker}`, {method:'POST'});
+    const data = await r.json();
+    if (!data.ok || !data.options || !data.options.available) {
+      box.innerHTML = `<div style="color:var(--muted);font-size:13px">${(data.options&&data.options.note)||data.note||'No liquid contract found.'}</div>`;
+    } else {
+      const o = data.options;
+      const kc = o.kind === 'call' ? '#3fb950' : '#f85149';
+      const retC = (v) => v >= 0 ? '#3fb950' : '#f85149';
+      box.innerHTML = `
+        <div style="border:1px solid var(--border);border-left:3px solid ${kc};border-radius:8px;padding:14px;background:#0d1117">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div style="font-weight:700;font-size:15px">${o.kind.toUpperCase()} · ${o.ticker} $${o.strike} <span style="color:var(--muted);font-weight:400;font-size:12px">${o.expiry} · ${o.dte}DTE · ${o.moneyness}</span></div>
+            <div style="font-size:11px;color:var(--muted)">Δ${o.delta>=0?'+':''}${o.delta} · IV ${o.iv}%</div>
+          </div>
+          <div class="detail-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px">
+            <div class="detail-metric"><div class="detail-metric-val">$${o.entry}</div><div class="detail-metric-label">Buy ≤ (ask)</div></div>
+            <div class="detail-metric"><div class="detail-metric-val" style="color:#f85149">$${o.stop}</div><div class="detail-metric-label">Stop</div></div>
+            <div class="detail-metric"><div class="detail-metric-val" style="color:#3fb950">$${o.tp1}</div><div class="detail-metric-label">TP1 <span style="color:${retC(o.tp1_ret_pct)}">${o.tp1_ret_pct>=0?'+':''}${o.tp1_ret_pct}%</span></div></div>
+            <div class="detail-metric"><div class="detail-metric-val" style="color:#3fb950">$${o.tp2}</div><div class="detail-metric-label">TP2 <span style="color:${retC(o.tp2_ret_pct)}">${o.tp2_ret_pct>=0?'+':''}${o.tp2_ret_pct}%</span></div></div>
+          </div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.6">
+            Bid/ask $${o.bid} / $${o.ask} · OI ${o.open_interest.toLocaleString()} · $${o.risk_per_contract.toLocaleString()}/contract max risk · breakeven underlying $${o.breakeven}<br>
+            Targets assume stock $${o.underlying_targets.spot} → TP1 $${o.underlying_targets.tp1} / TP2 $${o.underlying_targets.tp2}, stop $${o.underlying_targets.stop} (±1σ ≈ $${o.implied_move_1sigma} / ${o.hold_days_modeled}d)
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:10px;padding-top:8px;border-top:1px solid #21262d;line-height:1.5">⚠ ${o.caveat}</div>
+        </div>`;
+    }
+  } catch (e) {
+    box.innerHTML = '<div style="color:var(--muted);font-size:13px">Options request failed.</div>';
+  }
+  btn.disabled = false;
+  btn.innerHTML = '⚡ Re-price option chain';
 }
 
 async function getCommentary(ticker) {

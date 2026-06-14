@@ -116,6 +116,20 @@ def format_message(result: dict) -> tuple[str, str, bool]:
                 f"Calibrated {conf_pct:.0f}% to TP1 (measured) — pair with the 2:1 "
                 f"runner; win-rate alone isn't edge."
             )
+    # Options play (call/put + price targets) — best-effort, never fatal.
+    if config.OPTIONS_ENABLED:
+        try:
+            import options as _opt
+            o = _opt.suggest(result)
+            if o and o.get("available"):
+                lines.append(
+                    f"{o['kind'].upper()} {o['strike']:g} {o['expiry']} ({o['dte']}DTE): "
+                    f"buy ≤ ${o['entry']:.2f}, TP1 ${o['tp1']:.2f} ({o['tp1_ret_pct']:+.0f}%) "
+                    f"/ TP2 ${o['tp2']:.2f}, stop ${o['stop']:.2f}"
+                )
+        except Exception:
+            pass
+
     risk = result.get("risk")
     if risk:
         lines.append(f"Risk: {risk}" + (" [PENNY]" if result.get("is_penny") else ""))

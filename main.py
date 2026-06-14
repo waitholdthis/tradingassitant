@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 import scanner
 import alerts
 import notify
+import options
 from config import (
     WATCHLIST, SCAN_INTERVAL_SECONDS,
     SHOW_ALL_TICKERS, CLEAR_SCREEN, LOG_FILE,
@@ -74,6 +75,16 @@ def deep_scan_ticker(ticker: str):
         return
 
     print(alerts.format_alert(result))
+
+    # ── Options suggestion (call/put with price targets) ──────
+    if result["signal"] in ("BUY", "SELL"):
+        print(f"\n{'─'*58}")
+        print(f"  OPTIONS PLAY — {'CALL' if result['signal']=='BUY' else 'PUT'}")
+        print(f"{'─'*58}")
+        try:
+            print(options.format_text(options.suggest(result)))
+        except Exception as e:
+            print(f"  Options unavailable: {e}")
 
     ind = result["indicators"]
     print(f"\n{'─'*58}")
