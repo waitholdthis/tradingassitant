@@ -16,6 +16,39 @@
 
 from config import RSI_OVERSOLD, RSI_OVERBOUGHT, VOLUME_SPIKE_MULT
 
+# Stops sit STOP_ATR_MULT ATRs from entry (= 1R). TP1 is the first/partial
+# target; TP2 is the runner. Calibration (calibration.py) measures the real
+# hit-rate of TP1 — that is what the engine reports as "confidence".
+STOP_ATR_MULT     = 2.0
+STOP_PCT_FALLBACK = 0.05   # used when ATR is unavailable
+TP1_RR            = 1.0     # first target / take partial (≈1:1)
+TP2_RR            = 2.0     # runner — where the positive expectancy lives
+
+
+def build_trade_plan(price: float, atr: float, signal: str) -> dict | None:
+    """Entry, stop, and two take-profit targets for a signal.
+
+    Risk (R) is STOP_ATR_MULT ATRs (falling back to STOP_PCT_FALLBACK of price).
+    Targets sit at 2R and 3R for a 2:1 / 3:1 reward:risk. Returns None for HOLD
+    or non-positive price. This is the single source of truth for trade levels —
+    notify.py, the dashboard, and the backtest calibration all use it.
+    """
+    if price <= 0 or signal not in ("BUY", "SELL"):
+        return None
+    risk = atr * STOP_ATR_MULT if atr and atr > 0 else price * STOP_PCT_FALLBACK
+    direction = 1 if signal == "BUY" else -1
+    stop = price - direction * risk
+    tp1  = price + direction * risk * TP1_RR
+    tp2  = price + direction * risk * TP2_RR
+    return {
+        "entry":     round(price, 4),
+        "stop":      round(stop, 4),
+        "tp1":       round(tp1, 4),
+        "tp2":       round(tp2, 4),
+        "risk_per_share": round(risk, 4),
+        "rr":        TP1_RR,
+    }
+
 
 def _trend_score(ind):
     p, e9, e21 = ind["price"], ind["ema_9"], ind["ema_21"]
@@ -274,20 +307,61 @@ def generate_signal(ind, ticker, is_penny=False):
     # ── CLASSIFY ──────────────────────────────────────────────
     score = max(0, min(100, round(score)))
     signal     = "BUY" if score >= 65 else ("SELL" if score <= 35 else "HOLD")
-    confidence = "STRONG" if (score >= 80 or score <= 20) else ("MODERATE" if (score >= 65 or score <= 35) else "WEAK")
     atr_pct    = ind["atr"] / price * 100 if price > 0 else 0
     risk       = "HIGH" if (is_penny or atr_pct > 5) else ("MEDIUM" if atr_pct > 2 else "LOW")
+
+    trade_plan = build_trade_plan(price, ind.get("atr", 0.0), signal)
+
+    # ── CALIBRATED CONFIDENCE ─────────────────────────────────
+    # confidence_pct is the historically MEASURED probability this signal's
+    # score bucket reaches its first target (TP1) before its stop — not a
+    # label. None when no calibration table exists or the bucket is untrusted;
+    # in that case we fall back to the old score-band label and say so.
+    confidence_pct, confidence_trusted = _calibrated_confidence(score, signal)
+    if confidence_pct is not None and confidence_trusted:
+        confidence = _confidence_label(confidence_pct)
+        confidence_basis = "calibrated"
+    else:
+        confidence = "STRONG" if (score >= 80 or score <= 20) else (
+            "MODERATE" if (score >= 65 or score <= 35) else "WEAK")
+        confidence_basis = "uncalibrated"
 
     return {
         "ticker":      ticker,
         "signal":      signal,
         "score":       score,
         "confidence":  confidence,
+        "confidence_pct":     confidence_pct,     # measured % or None
+        "confidence_trusted": confidence_trusted,
+        "confidence_basis":   confidence_basis,   # "calibrated" | "uncalibrated"
         "reasons":     reasons,
         "risk":        risk,
         "is_penny":    is_penny,
         "regime":      regime,
         "adx":         adx,
         "confluence":  {"buys": confirming_buys, "sells": confirming_sells},
+        "trade_plan":  trade_plan,
         "indicators":  ind,
     }
+
+
+def _calibrated_confidence(score, signal):
+    """Look up measured confidence; lazy import avoids a calibration<->signals
+    import cycle. Returns (pct_or_None, trusted)."""
+    if signal not in ("BUY", "SELL"):
+        return None, False
+    try:
+        import calibration
+        return calibration.confidence_for(score, signal)
+    except Exception:
+        return None, False
+
+
+def _confidence_label(pct: float) -> str:
+    """Map a measured probability to a label. Bands reflect that, at a 1:1
+    first target, ~50% is the realistic ceiling for this engine."""
+    if pct >= 60:
+        return "STRONG"
+    if pct >= 50:
+        return "MODERATE"
+    return "WEAK"

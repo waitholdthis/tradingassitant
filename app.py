@@ -5,13 +5,16 @@ Run:  python app.py
 Open: http://localhost:5000
 """
 
-import sys, json, time, threading
+import os, sys, json, time, threading
 from datetime import datetime
 from flask import Flask, jsonify, request, render_template_string
 
 sys.path.insert(0, ".")
 import config
 import indicators
+import notify
+import commentary
+import options as opt_engine
 import signals as sig_engine
 import scanner as sc
 
@@ -39,6 +42,13 @@ def _result_to_dict(r):
         "signal":     r["signal"],
         "score":      r["score"],
         "confidence": r["confidence"],
+        "confidence_pct":     r.get("confidence_pct"),
+        "confidence_basis":   r.get("confidence_basis", "uncalibrated"),
+        "confidence_trusted": r.get("confidence_trusted", False),
+        "trade_plan": r.get("trade_plan"),
+        "tradable":   r.get("tradable", True),
+        "liquidity":  r.get("liquidity", {}),
+        "liquidity_note": r.get("liquidity_note", ""),
         "risk":       r["risk"],
         "is_penny":   r["is_penny"],
         "regime":     r.get("regime", "—"),
@@ -70,7 +80,10 @@ def _scan_ticker_safe(ticker):
         df = sc.fetch_data(ticker)
         if df is None or len(df) < 30:
             return {"ticker": ticker, "signal": "—", "score": 50,
-                    "confidence": "—", "risk": "—", "is_penny": False,
+                    "confidence": "—", "confidence_pct": None,
+                    "confidence_basis": "uncalibrated", "confidence_trusted": False,
+                    "trade_plan": None, "tradable": False, "liquidity": {},
+                    "liquidity_note": "", "risk": "—", "is_penny": False,
                     "regime": "—", "adx": 0, "confluence": {},
                     "reasons": ["Insufficient data"], "price": 0,
                     "rsi": 50, "macd_hist": 0, "volume_ratio": 1,
@@ -100,6 +113,19 @@ def _scan_ticker_safe(ticker):
 
 @app.route("/")
 def index():
+    """Cinematic marketing landing page (THE TAPE)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "landing.html")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return render_template_string(DASHBOARD_HTML)  # fall back to the app
+
+
+@app.route("/app")
+@app.route("/dashboard")
+def dashboard():
+    """The live signal terminal."""
     return render_template_string(DASHBOARD_HTML)
 
 
@@ -128,6 +154,7 @@ def api_scan_all():
             results.append(_scan_ticker_safe(t))
             time.sleep(0.2)
         results.sort(key=lambda r: r["score"], reverse=True)
+        notify.dispatch(results)  # mobile push for actionable signals (cooldown inside)
         with _lock:
             _state["last_results"] = results
             _state["last_scan_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -141,7 +168,43 @@ def api_scan_all():
 def api_scan_ticker(ticker):
     ticker = ticker.upper().strip()
     result = _scan_ticker_safe(ticker)
+    notify.dispatch([result])
     return jsonify(result)
+
+
+@app.route("/api/commentary/<ticker>", methods=["POST"])
+def api_commentary(ticker):
+    """Optional LLM desk note. Returns {enabled, note}. Off when no API key."""
+    ticker = ticker.upper().strip()
+    if not commentary.is_enabled():
+        return jsonify({
+            "enabled": False,
+            "note": "AI commentary is off — set ANTHROPIC_API_KEY and "
+                    "`pip install anthropic` to enable.",
+        })
+    try:
+        full = sc.scan_ticker(ticker)  # rich result (has indicators + plan)
+        note = commentary.generate(full) if full else None
+        return jsonify({"enabled": True, "note": note or "Commentary unavailable."})
+    except Exception as e:
+        return jsonify({"enabled": True, "note": f"Commentary error: {e}"}), 200
+
+
+@app.route("/api/options/<ticker>", methods=["POST"])
+def api_options(ticker):
+    """Suggest a call/put with buy/sell price targets for a ticker's signal."""
+    ticker = ticker.upper().strip()
+    try:
+        full = sc.scan_ticker(ticker)
+        if not full:
+            return jsonify({"ok": False, "note": f"No data for {ticker}."})
+        if full["signal"] not in ("BUY", "SELL"):
+            return jsonify({"ok": False, "signal": full["signal"],
+                            "note": f"{ticker} is {full['signal']} — no directional options play."})
+        plan = opt_engine.suggest(full)
+        return jsonify({"ok": True, "signal": full["signal"], "options": plan})
+    except Exception as e:
+        return jsonify({"ok": False, "note": f"Options error: {e}"}), 200
 
 
 @app.route("/api/watchlist", methods=["GET"])
@@ -560,6 +623,34 @@ function showDetail(r) {
   const sig = r.signal || '—';
   const scoreColor = sig === 'BUY' ? '#3fb950' : sig === 'SELL' ? '#f85149' : '#d29922';
   const barClass = scoreBarClass(sig, r.score);
+
+  // Calibrated confidence — measured hit-rate, not a label.
+  let confLine;
+  if (r.confidence_pct != null && r.confidence_basis === 'calibrated') {
+    const trust = r.confidence_trusted ? '' : ' (low sample)';
+    confLine = `<b style="color:${scoreColor}">${r.confidence_pct}% calibrated</b> hit-rate to TP1${trust} · ${r.confidence} · ${r.risk} risk · ${r.regime||'—'} (ADX ${r.adx})`;
+  } else {
+    confLine = `${r.confidence} confidence (uncalibrated) · ${r.risk} risk · ${r.regime||'—'} (ADX ${r.adx})`;
+  }
+
+  // Trade plan block (BUY/SELL only).
+  const p = r.trade_plan;
+  const planHtml = p ? `
+    <div style="margin-top:12px"><div class="section-title">TRADE PLAN (${sig})</div>
+    <div class="detail-grid" style="grid-template-columns:repeat(4,1fr)">
+      <div class="detail-metric"><div class="detail-metric-val">$${p.entry}</div><div class="detail-metric-label">Entry</div></div>
+      <div class="detail-metric"><div class="detail-metric-val" style="color:#f85149">$${p.stop}</div><div class="detail-metric-label">Stop</div></div>
+      <div class="detail-metric"><div class="detail-metric-val" style="color:#3fb950">$${p.tp1}</div><div class="detail-metric-label">TP1 (1R)</div></div>
+      <div class="detail-metric"><div class="detail-metric-val" style="color:#3fb950">$${p.tp2}</div><div class="detail-metric-label">TP2 (2R)</div></div>
+    </div></div>` : '';
+
+  // Liquidity line.
+  const liq = r.liquidity || {};
+  const liqHtml = liq.avg_daily_dollar_vol != null ? `
+    <div style="margin-top:8px;color:var(--muted);font-size:12px">
+      Liquidity: $${(liq.avg_daily_dollar_vol/1e6).toFixed(1)}M/day · ${(liq.avg_daily_volume||0).toLocaleString()} sh/day
+      ${r.tradable ? '' : ' · <span style="color:#f85149">⚠ '+(r.liquidity_note||'illiquid')+'</span>'}
+    </div>` : '';
   
   const patternsHtml = Object.entries(r.patterns || {}).length > 0 ?
     `<div style="margin-top:12px"><div class="section-title">PATTERNS</div>
@@ -580,7 +671,20 @@ function showDetail(r) {
           <div class="score-bar ${barClass}" style="width:${r.score}%"></div>
         </div>
       </div>
-      <div style="color:var(--muted);font-size:12px">${r.confidence} confidence · ${r.risk} risk · ${r.regime || '—'} (ADX ${r.adx})</div>
+      <div style="font-size:12px">${confLine}</div>
+      ${liqHtml}
+    </div>
+    ${planHtml}
+    ${(sig === 'BUY' || sig === 'SELL') ? `
+    <div style="margin-top:16px">
+      <div class="section-title">OPTIONS PLAY — ${sig === 'BUY' ? 'CALL' : 'PUT'}</div>
+      <button class="btn btn-ghost" id="optionsBtn" onclick="getOptions('${r.ticker}')">⚡ Suggest ${sig === 'BUY' ? 'call' : 'put'} + price targets</button>
+      <div id="optionsBox" style="margin-top:10px"></div>
+    </div>` : ''}
+    <div style="margin-top:16px">
+      <div class="section-title">AI DESK NOTE</div>
+      <button class="btn btn-ghost" id="commentaryBtn" onclick="getCommentary('${r.ticker}')">🧠 Generate desk note</button>
+      <div id="commentaryBox" style="margin-top:10px;white-space:pre-wrap;font-size:13px;line-height:1.5;color:var(--text)"></div>
     </div>
     <div class="detail-grid">
       <div class="detail-metric"><div class="detail-metric-val">$${r.price.toFixed(4)}</div><div class="detail-metric-label">Price</div></div>
@@ -608,6 +712,66 @@ function showDetail(r) {
     </div>`;
   
   document.getElementById('detailOverlay').classList.add('open');
+}
+
+async function getOptions(ticker) {
+  const btn = document.getElementById('optionsBtn');
+  const box = document.getElementById('optionsBox');
+  if (!btn || !box) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Pricing chain…';
+  box.innerHTML = '';
+  try {
+    const r = await fetch(`/api/options/${ticker}`, {method:'POST'});
+    const data = await r.json();
+    if (!data.ok || !data.options || !data.options.available) {
+      box.innerHTML = `<div style="color:var(--muted);font-size:13px">${(data.options&&data.options.note)||data.note||'No liquid contract found.'}</div>`;
+    } else {
+      const o = data.options;
+      const kc = o.kind === 'call' ? '#3fb950' : '#f85149';
+      const retC = (v) => v >= 0 ? '#3fb950' : '#f85149';
+      box.innerHTML = `
+        <div style="border:1px solid var(--border);border-left:3px solid ${kc};border-radius:8px;padding:14px;background:#0d1117">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div style="font-weight:700;font-size:15px">${o.kind.toUpperCase()} · ${o.ticker} $${o.strike} <span style="color:var(--muted);font-weight:400;font-size:12px">${o.expiry} · ${o.dte}DTE · ${o.moneyness}</span></div>
+            <div style="font-size:11px;color:var(--muted)">Δ${o.delta>=0?'+':''}${o.delta} · IV ${o.iv}%</div>
+          </div>
+          <div class="detail-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px">
+            <div class="detail-metric"><div class="detail-metric-val">$${o.entry}</div><div class="detail-metric-label">Buy ≤ (ask)</div></div>
+            <div class="detail-metric"><div class="detail-metric-val" style="color:#f85149">$${o.stop}</div><div class="detail-metric-label">Stop</div></div>
+            <div class="detail-metric"><div class="detail-metric-val" style="color:#3fb950">$${o.tp1}</div><div class="detail-metric-label">TP1 <span style="color:${retC(o.tp1_ret_pct)}">${o.tp1_ret_pct>=0?'+':''}${o.tp1_ret_pct}%</span></div></div>
+            <div class="detail-metric"><div class="detail-metric-val" style="color:#3fb950">$${o.tp2}</div><div class="detail-metric-label">TP2 <span style="color:${retC(o.tp2_ret_pct)}">${o.tp2_ret_pct>=0?'+':''}${o.tp2_ret_pct}%</span></div></div>
+          </div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.6">
+            Bid/ask $${o.bid} / $${o.ask} · OI ${o.open_interest.toLocaleString()} · $${o.risk_per_contract.toLocaleString()}/contract max risk · breakeven underlying $${o.breakeven}<br>
+            Targets assume stock $${o.underlying_targets.spot} → TP1 $${o.underlying_targets.tp1} / TP2 $${o.underlying_targets.tp2}, stop $${o.underlying_targets.stop} (±1σ ≈ $${o.implied_move_1sigma} / ${o.hold_days_modeled}d)
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:10px;padding-top:8px;border-top:1px solid #21262d;line-height:1.5">⚠ ${o.caveat}</div>
+        </div>`;
+    }
+  } catch (e) {
+    box.innerHTML = '<div style="color:var(--muted);font-size:13px">Options request failed.</div>';
+  }
+  btn.disabled = false;
+  btn.innerHTML = '⚡ Re-price option chain';
+}
+
+async function getCommentary(ticker) {
+  const btn = document.getElementById('commentaryBtn');
+  const box = document.getElementById('commentaryBox');
+  if (!btn || !box) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Thinking…';
+  box.textContent = '';
+  try {
+    const r = await fetch(`/api/commentary/${ticker}`, {method:'POST'});
+    const data = await r.json();
+    box.textContent = data.note || '(no commentary)';
+  } catch (e) {
+    box.textContent = 'Commentary request failed.';
+  }
+  btn.disabled = false;
+  btn.innerHTML = '🧠 Generate desk note';
 }
 
 async function rescanFromDetail(ticker) {

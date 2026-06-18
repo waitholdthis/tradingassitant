@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+dist/
+build/
+portfolio.json
+.DS_Store
+
+# Runtime artifacts
+alerts.log
+.ticker_universe_cache.txt
+.claude/
